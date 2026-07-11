@@ -16,7 +16,6 @@ import { getWeather } from './src/FrodoWeather';
 import { getForexTip } from './src/FrodoForex';
 import { handleCommand } from './src/FrodoCommands';
 import { analyzeSelf } from './src/FrodoSelf';
-import { getFrodoGitHub, saveGitHubConfig } from './src/FrodoGitHub';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -40,10 +39,6 @@ export default function App() {
   const [frodoMood, setFrodoMood] = useState('neutral');
   const [friendshipLevel, setFriendshipLevel] = useState(0);
   const [selfCheckStatus, setSelfCheckStatus] = useState('');
-  const [githubToken, setGithubToken] = useState('');
-  const [githubOwner, setGithubOwner] = useState('');
-  const [githubRepo, setGithubRepo] = useState('');
-  const [showGithub, setShowGithub] = useState(false);
 
   const scrollRef = useRef();
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -146,7 +141,7 @@ export default function App() {
     try {
       const loc = await Location.getCurrentPositionAsync({});
       weatherInfo = await getWeather(loc.coords.latitude, loc.coords.longitude);
-    } catch (e) {}
+    } catch (e) { }
     const savedName = await AsyncStorage.getItem('frodo_user_name');
     const savedKey = await AsyncStorage.getItem('frodo_api_key');
     const savedLevel = parseInt(await AsyncStorage.getItem('frodo_friendship') || '0');
@@ -177,15 +172,7 @@ export default function App() {
       setSetupStep('intro');
     }
     await requestPermissions();
-    // GitHub config yükle
-    const gh = await getFrodoGitHub();
-    if (gh) {
-      const { loadGitHubConfig } = await import('./src/FrodoGitHub');
-      const cfg = await loadGitHubConfig();
-      if (cfg.token) setGithubToken(cfg.token);
-      if (cfg.owner) setGithubOwner(cfg.owner);
-      if (cfg.repo) setGithubRepo(cfg.repo);
-    }
+
   };
 
   const requestPermissions = async () => {
@@ -203,7 +190,7 @@ export default function App() {
     try {
       const loc = await Location.getCurrentPositionAsync({});
       weatherInfo = await getWeather(loc.coords.latitude, loc.coords.longitude);
-    } catch (e) {}
+    } catch (e) { }
     const today = new Date().toDateString();
     const lastMorning = await AsyncStorage.getItem('frodo_morning_date');
     const hour = new Date().getHours();
@@ -250,14 +237,14 @@ export default function App() {
     micAnim.setValue(1);
     setIsListening(false);
     setFrodoMood('neutral');
-    try { ExpoSpeechRecognitionModule.stop(); } catch (e) {}
+    try { ExpoSpeechRecognitionModule.stop(); } catch (e) { }
   };
 
   const toggleWakeMode = async () => {
     if (wakeMode) {
       wakeModeRef.current = false;
       setWakeMode(false);
-      try { ExpoSpeechRecognitionModule.stop(); } catch (e) {}
+      try { ExpoSpeechRecognitionModule.stop(); } catch (e) { }
       addMessage('assistant', 'Dinlemeyi durdurdum.');
     } else {
       const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
@@ -327,22 +314,8 @@ export default function App() {
       await increaseFriendship(1);
       return;
     }
-    // GitHub ile kod geliştirme
-    if ((text.includes('kendini geliştir') || text.includes('özünü inkişaf') ||
-         text.includes('kod yaz') || text.includes('özellik ekle') ||
-         text.includes('xüsusiyyət əlavə')) && githubToken) {
-      const gh = new (await import('./src/FrodoGitHub')).FrodoGitHub(githubToken, githubOwner, githubRepo);
-      addMessage('assistant', 'GitHub-dan kodumu oxuyuram... 🔍');
-      const files = await gh.listFiles('src');
-      addMessage('assistant', `Kodumda ${files.length} fayl var. Hansını yeniləyim?\n${files.map(f => '• ' + f.name).join('\n')}`);
-      setIsLoading(false);
-      setFrodoMood('neutral');
-      await increaseFriendship(3);
-      return;
-    }
-
     if (text.includes('kendini geliştir') || text.includes('hata düzelt') ||
-        (text.includes('ekle') && text.includes('özellik'))) {
+      (text.includes('ekle') && text.includes('özellik'))) {
       const result = await analyzeSelf(apiKey, text);
       setIsLoading(false);
       setFrodoMood('neutral');
@@ -519,12 +492,7 @@ export default function App() {
         <TouchableOpacity style={s.chip} onPress={() => setSetupStep('key')}>
           <Text style={s.chipText}>🔑 Key</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.chip, githubToken && { borderColor: '#22C55E66' }]}
-          onPress={() => setShowGithub(true)}>
-          <Text style={[s.chipText, githubToken && { color: '#22C55E' }]}>
-            {githubToken ? '🐙 GitHub ✓' : '🐙 GitHub'}
-          </Text>
-        </TouchableOpacity>
+
         <TouchableOpacity style={s.chip} onPress={async () => {
           const tip = await getForexTip('güncel döviz kurları', apiKey);
           addMessage('assistant', tip); speak(tip);
@@ -614,34 +582,7 @@ export default function App() {
           </View>
         </KeyboardAvoidingView>
       )}
-    {/* GitHub Modal */}
-      {showGithub && (
-        <View style={s.modal}>
-          <View style={s.modalBox}>
-            <Text style={s.modalTitle}>🐙 GitHub Bağlantısı</Text>
-            <Text style={s.modalSub}>Frodo kendi kodunu okuyup geliştirecek</Text>
-            <TextInput style={s.setupInput} placeholder="GitHub Token (ghp_...)"
-              placeholderTextColor="#334155" value={githubToken}
-              onChangeText={setGithubToken} secureTextEntry autoCapitalize="none" />
-            <TextInput style={s.setupInput} placeholder="GitHub Kullanıcı Adın"
-              placeholderTextColor="#334155" value={githubOwner}
-              onChangeText={setGithubOwner} autoCapitalize="none" />
-            <TextInput style={s.setupInput} placeholder="Repo adı (frodo-assistant)"
-              placeholderTextColor="#334155" value={githubRepo}
-              onChangeText={setGithubRepo} autoCapitalize="none" />
-            <TouchableOpacity style={s.bigBtn} onPress={async () => {
-              await saveGitHubConfig(githubToken, githubOwner, githubRepo);
-              setShowGithub(false);
-              addMessage('assistant', `GitHub bağlandı! 🐙 ${githubOwner}/${githubRepo} repo-sunu görə bilirəm. İndi "özünü inkişaf etdir" de, kodunu oxuyacam!`);
-            }}>
-              <Text style={s.bigBtnText}>Kaydet ✓</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowGithub(false)}>
-              <Text style={s.backText}>Kapat</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
+
     </LinearGradient>
   );
 }
@@ -698,8 +639,5 @@ const s = StyleSheet.create({
   sendBtn: { alignSelf: 'flex-end' },
   sendGrad: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   sendIcon: { color: '#FFF', fontSize: 20, fontWeight: '900' },
-  modal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000000AA', justifyContent: 'center', padding: 24, zIndex: 999 },
-  modalBox: { backgroundColor: '#0F172A', borderRadius: 20, padding: 24, borderWidth: 1, borderColor: '#1E293B' },
-  modalTitle: { color: '#F1F5F9', fontSize: 20, fontWeight: '900', marginBottom: 4 },
-  modalSub: { color: '#64748B', fontSize: 13, marginBottom: 20 },
+
 });
