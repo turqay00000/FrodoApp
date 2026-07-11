@@ -39,6 +39,10 @@ export default function App() {
   const [frodoMood, setFrodoMood] = useState('neutral');
   const [friendshipLevel, setFriendshipLevel] = useState(0);
   const [selfCheckStatus, setSelfCheckStatus] = useState('');
+  const [githubToken, setGithubToken] = useState('');
+  const [githubOwner, setGithubOwner] = useState('turqay00000');
+  const [githubRepo, setGithubRepo] = useState('FrodoApp');
+  const [showGithub, setShowGithub] = useState(false);
 
   const scrollRef = useRef();
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -141,7 +145,7 @@ export default function App() {
     try {
       const loc = await Location.getCurrentPositionAsync({});
       weatherInfo = await getWeather(loc.coords.latitude, loc.coords.longitude);
-    } catch (e) { }
+    } catch (e) {}
     const savedName = await AsyncStorage.getItem('frodo_user_name');
     const savedKey = await AsyncStorage.getItem('frodo_api_key');
     const savedLevel = parseInt(await AsyncStorage.getItem('frodo_friendship') || '0');
@@ -172,6 +176,8 @@ export default function App() {
       setSetupStep('intro');
     }
     await requestPermissions();
+    const ghToken = await AsyncStorage.getItem('frodo_github_token');
+    if (ghToken) setGithubToken(ghToken);
 
   };
 
@@ -179,6 +185,91 @@ export default function App() {
     await Notifications.requestPermissionsAsync();
     await Location.requestForegroundPermissionsAsync();
     await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+  };
+
+  // ── GITHUB API ──
+  const githubReadFile = async (path) => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${githubOwner}/${githubRepo}/contents/${path}`, {
+        headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      const data = await res.json();
+      if (data.message) return null;
+      return { content: decodeURIComponent(escape(atob(data.content.replace(/\n/g, '')))), sha: data.sha };
+    } catch (e) { return null; }
+  };
+
+  const githubUpdateFile = async (path, newContent, sha, message) => {
+    try {
+      const encoded = btoa(unescape(encodeURIComponent(newContent)));
+      const res = await fetch(`https://api.github.com/repos/${githubOwner}/${githubRepo}/contents/${path}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message || 'Frodo: auto update', content: encoded, sha })
+      });
+      const data = await res.json();
+      return data.commit ? true : false;
+    } catch (e) { return false; }
+  };
+
+  const githubListFiles = async (path = 'src') => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${githubOwner}/${githubRepo}/contents/${path}`, {
+        headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      const data = await res.json();
+      if (!Array.isArray(data)) return [];
+      return data.map(f => f.name);
+    } catch (e) { return []; }
+  };
+
+  const frodoSelfImprove = async (instruction) => {
+    if (!githubToken) {
+      return '🐙 GitHub bağlı deyil. Üst menyudan GitHub butonuna bas, token gir!';
+    }
+    addMessage('assistant', 'GitHub-dan kodumu oxuyuram... 🔍');
+    const files = await githubListFiles('src');
+    if (!files.length) return 'GitHub-a qoşula bilmədim.';
+    
+    // Hangi dosyayı değiştireceğini AI'dan sor
+    const planPrompt = `Frodo AI asistan uygulamasının kodunu geliştiriyorsun.
+src/ klasöründe şu dosyalar var: ${files.join(', ')}
+Görev: ${instruction}
+Hangi dosyayı düzenleyeceğini ve ne yapacağını kısaca söyle (1-2 cümle).`;
+    
+    const plan = await callAI(planPrompt, [], apiKey, userName, friendshipLevel, '');
+    addMessage('assistant', plan);
+    
+    // İlgili dosyayı oku
+    const targetFile = files.find(f => 
+      instruction.toLowerCase().includes(f.toLowerCase().replace('.js','')) ||
+      plan.toLowerCase().includes(f.toLowerCase().replace('.js',''))
+    ) || 'FrodoCommands.js';
+    
+    addMessage('assistant', `${targetFile} faylını oxuyuram...`);
+    const fileData = await githubReadFile(`src/${targetFile}`);
+    if (!fileData) return `${targetFile} oxuna bilmədi.`;
+    
+    // AI'dan yeni kod al
+    const codePrompt = `Aşağıdaki React Native kodunu güncelle.
+Görev: ${instruction}
+Mevcut kod:
+${fileData.content.substring(0, 2000)}
+
+Sadece güncellenmiş tam kodu döndür, açıklama yok, markdown yok.`;
+    
+    const newCode = await callAI(codePrompt, [], apiKey, userName, friendshipLevel, '');
+    const cleanCode = newCode.replace(/\`\`\`javascript\n?/g, '').replace(/\`\`\`js\n?/g, '').replace(/\`\`\`\n?/g, '').trim();
+    
+    // GitHub'a commit et
+    addMessage('assistant', `${targetFile} yenilənir...`);
+    const success = await githubUpdateFile(`src/${targetFile}`, cleanCode, fileData.sha, `Frodo: ${instruction.substring(0,50)}`);
+    
+    if (success) {
+      return `✅ ${targetFile} uğurla yeniləndi! GitHub-da commit edildi. Yeni APK üçün "eas build" işlət.`;
+    } else {
+      return `❌ Commit uğursuz oldu. Token-ı yoxla.`;
+    }
   };
 
   const bootSequence = async (name, key, level) => {
@@ -190,7 +281,7 @@ export default function App() {
     try {
       const loc = await Location.getCurrentPositionAsync({});
       weatherInfo = await getWeather(loc.coords.latitude, loc.coords.longitude);
-    } catch (e) { }
+    } catch (e) {}
     const today = new Date().toDateString();
     const lastMorning = await AsyncStorage.getItem('frodo_morning_date');
     const hour = new Date().getHours();
@@ -237,14 +328,14 @@ export default function App() {
     micAnim.setValue(1);
     setIsListening(false);
     setFrodoMood('neutral');
-    try { ExpoSpeechRecognitionModule.stop(); } catch (e) { }
+    try { ExpoSpeechRecognitionModule.stop(); } catch (e) {}
   };
 
   const toggleWakeMode = async () => {
     if (wakeMode) {
       wakeModeRef.current = false;
       setWakeMode(false);
-      try { ExpoSpeechRecognitionModule.stop(); } catch (e) { }
+      try { ExpoSpeechRecognitionModule.stop(); } catch (e) {}
       addMessage('assistant', 'Dinlemeyi durdurdum.');
     } else {
       const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
@@ -314,8 +405,22 @@ export default function App() {
       await increaseFriendship(1);
       return;
     }
+    // GitHub self-improve
+    if (text.includes('özünü inkişaf') || text.includes('kendini geliştir') ||
+        text.includes('xüsusiyyət əlavə') || text.includes('özellik ekle') ||
+        text.includes('kodu yenilə') || text.includes('fix ') || text.includes('düzelt')) {
+      setIsLoading(false);
+      setFrodoMood('neutral');
+      const result = await frodoSelfImprove(text);
+      addMessage('assistant', result);
+      speak(result);
+      await increaseFriendship(3);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+      return;
+    }
+
     if (text.includes('kendini geliştir') || text.includes('hata düzelt') ||
-      (text.includes('ekle') && text.includes('özellik'))) {
+        (text.includes('ekle') && text.includes('özellik'))) {
       const result = await analyzeSelf(apiKey, text);
       setIsLoading(false);
       setFrodoMood('neutral');
@@ -492,6 +597,12 @@ export default function App() {
         <TouchableOpacity style={s.chip} onPress={() => setSetupStep('key')}>
           <Text style={s.chipText}>🔑 Key</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={[s.chip, githubToken && { borderColor: '#22C55E88' }]}
+          onPress={() => setShowGithub(true)}>
+          <Text style={[s.chipText, githubToken && { color: '#22C55E' }]}>
+            {githubToken ? '🐙 GitHub ✓' : '🐙 GitHub'}
+          </Text>
+        </TouchableOpacity>
 
         <TouchableOpacity style={s.chip} onPress={async () => {
           const tip = await getForexTip('güncel döviz kurları', apiKey);
@@ -583,6 +694,34 @@ export default function App() {
         </KeyboardAvoidingView>
       )}
 
+      {showGithub && (
+        <View style={s.modal}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>🐙 GitHub</Text>
+            <Text style={s.modalSub}>Frodo öz kodunu oxuyub yeniləyəcək</Text>
+            <TextInput style={s.setupInput} placeholder="GitHub Token (ghp_...)"
+              placeholderTextColor="#334155" value={githubToken}
+              onChangeText={setGithubToken} secureTextEntry autoCapitalize="none" />
+            <TextInput style={s.setupInput} placeholder="GitHub istifadəçi adı"
+              placeholderTextColor="#334155" value={githubOwner}
+              onChangeText={setGithubOwner} autoCapitalize="none" />
+            <TextInput style={s.setupInput} placeholder="Repo adı (FrodoApp)"
+              placeholderTextColor="#334155" value={githubRepo}
+              onChangeText={setGithubRepo} autoCapitalize="none" />
+            <TouchableOpacity style={s.bigBtn} onPress={async () => {
+              await AsyncStorage.setItem('frodo_github_token', githubToken);
+              setShowGithub(false);
+              addMessage('assistant', `GitHub bağlandı! 🐙 "${githubRepo}" repo-sunu görürəm. İndi "özünü inkişaf etdir" de!`);
+              speak('GitHub bağlandı!');
+            }}>
+              <Text style={s.bigBtnText}>Bağla ✓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowGithub(false)} style={{ marginTop: 12 }}>
+              <Text style={s.backText}>Bağla</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </LinearGradient>
   );
 }
@@ -639,5 +778,9 @@ const s = StyleSheet.create({
   sendBtn: { alignSelf: 'flex-end' },
   sendGrad: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   sendIcon: { color: '#FFF', fontSize: 20, fontWeight: '900' },
+  modal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000000CC', justifyContent: 'center', padding: 24, zIndex: 999 },
+  modalBox: { backgroundColor: '#0F172A', borderRadius: 20, padding: 24, borderWidth: 1, borderColor: '#1E293B' },
+  modalTitle: { color: '#F1F5F9', fontSize: 20, fontWeight: '900', marginBottom: 6 },
+  modalSub: { color: '#64748B', fontSize: 13, marginBottom: 20, lineHeight: 20 },
 
 });
